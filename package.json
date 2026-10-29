@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.0",
-    "imapflow": "^1.0.162"
+    "imapflow": "^1.0.162",
+    "mailparser": "^3.7.1"
   }
 }
