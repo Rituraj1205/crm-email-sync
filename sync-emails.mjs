@@ -1,4 +1,5 @@
 import { ImapFlow } from 'imapflow';
+import { simpleParser } from 'mailparser';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -58,8 +59,8 @@ for (const acc of accounts) {
         const mid = msg.envelope.messageId ?? `${acc.email}-${msg.uid}`;
         if (await sbExists(mid)) continue;
         const from = msg.envelope.from?.[0];
-        const src = msg.source?.toString() ?? '';
-        const body = src.replace(/^[\s\S]*?\r\n\r\n/, '').substring(0, 3000);
+        const parsed = await simpleParser(msg.source);
+        const body = (parsed.text || parsed.html?.replace(/<[^>]+>/g, '') || '').substring(0, 3000);
         try {
           await sbInsert('emails', {
             account: acc.email,
