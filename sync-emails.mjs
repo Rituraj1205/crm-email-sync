@@ -1,10 +1,38 @@
 import { ImapFlow } from 'imapflow';
-import { createClient } from '@supabase/supabase-js';
 
-const sb = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+async function sbInsert(table, row) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Prefer': 'return=minimal',
+    },
+    body: JSON.stringify(row),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Supabase insert error ${res.status}: ${text}`);
+  }
+}
+
+async function sbExists(messageId) {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/emails?message_id=eq.${encodeURIComponent(messageId)}&select=id&limit=1`,
+    {
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+      },
+    }
+  );
+  const data = await res.json();
+  return Array.isArray(data) && data.length > 0;
+}
 
 const accounts = JSON.parse(process.env.EMAIL_ACCOUNTS ?? '[]');
 const results = [];
@@ -21,30 +49,35 @@ for (const acc of accounts) {
     await client.connect();
     const lock = await client.getMailboxLock('INBOX');
     let synced = 0;
+    let errors = 0;
     try {
       const since = new Date();
       since.setDate(since.getDate() - 30);
       const uids = await client.search({ since });
       for await (const msg of client.fetch(uids.slice(-50), { envelope: true, source: true })) {
         const mid = msg.envelope.messageId ?? `${acc.email}-${msg.uid}`;
-        const { data: ex } = await sb.from('emails').select('id').eq('message_id', mid).maybeSingle();
-        if (ex) continue;
+        if (await sbExists(mid)) continue;
         const from = msg.envelope.from?.[0];
         const src = msg.source?.toString() ?? '';
         const body = src.replace(/^[\s\S]*?\r\n\r\n/, '').substring(0, 3000);
-        await sb.from('emails').insert({
-          account: acc.email,
-          from_address: from?.address ?? '',
-          from_name: from?.name ?? from?.address ?? '',
-          subject: msg.envelope.subject ?? '(no subject)',
-          body,
-          received_at: msg.envelope.date?.toISOString(),
-          message_id: mid,
-          thread_id: msg.envelope.inReplyTo ?? mid,
-        });
-        synced++;
+        try {
+          await sbInsert('emails', {
+            account: acc.email,
+            from_address: from?.address ?? '',
+            from_name: from?.name ?? from?.address ?? '',
+            subject: msg.envelope.subject ?? '(no subject)',
+            body,
+            received_at: msg.envelope.date?.toISOString(),
+            message_id: mid,
+            thread_id: msg.envelope.inReplyTo ?? mid,
+          });
+          synced++;
+        } catch (insertErr) {
+          console.error(`Insert failed for ${acc.email}:`, insertErr.message);
+          errors++;
+        }
       }
-      results.push({ account: acc.email, synced });
+      results.push({ account: acc.email, synced, errors });
     } finally {
       lock.release();
       await client.logout();
